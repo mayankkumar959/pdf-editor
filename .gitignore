@@ -15,11 +15,24 @@ dist-ssr
 .npm-cache/
 test-results/
 
+# Local environment configuration (keep shareable templates)
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Generated compiler, tool and coverage files
+*.tsbuildinfo
+.vite/
+coverage/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
 .idea
 .DS_Store
+Thumbs.db
+Desktop.ini
 *.suo
 *.ntvs*
 *.njsproj
