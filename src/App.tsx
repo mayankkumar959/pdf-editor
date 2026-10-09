@@ -425,7 +425,7 @@ function App() {
       <input ref={imageInput} type="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" hidden aria-label="Upload image or signature" onChange={event => { void uploadImage(event.target.files?.[0]); event.target.value = '' }} />
       <input ref={fileInput} id="file-upload" type="file" accept="application/pdf,.pdf" hidden onChange={event => { void upload(event.target.files?.[0]); event.target.value = '' }} />
       <header className="app-header">
-        <div className="brand" aria-label="Papyora PDF editor"><img className="brand-mark" src="/papyora-icon.svg" alt=""/><span>papyora<span className="brand-dot">.</span></span><span className="brand-label">PDF STUDIO</span></div>
+        <div className="brand" aria-label="Papyora PDF editor"><img className="brand-mark" src="/papyora-icon.svg" alt=""/><span className="brand-wordmark">papyora<span className="brand-dot">.</span></span><span className="brand-label">PDF STUDIO</span></div>
         <button className="button secondary" disabled={!!busy} onClick={() => fileInput.current?.click()}><Icon name="upload"/>{document ? 'Open PDF' : 'Upload PDF'}</button>
         <button className="button primary" disabled={!document || !!busy} onClick={() => void download()}><Icon name="download"/>Download PDF</button>
       </header>
