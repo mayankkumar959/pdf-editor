@@ -34,20 +34,29 @@ function PdfCanvas({ proxy, pageNumber, scale, thumbnail = false, onError }: { p
     let observer: IntersectionObserver | undefined
     const canvas = ref.current!
     async function render() {
+      const staging = document.createElement('canvas')
       try {
         canvas.dataset.renderState = 'pending'
         const page = await proxy.getPage(pageNumber)
         if (cancelled) return
         const viewport = page.getViewport({ scale })
         const ratio = Math.min(window.devicePixelRatio || 1, 2, 8192 / Math.max(viewport.width, viewport.height), Math.sqrt(20_000_000 / (viewport.width * viewport.height)))
-        canvas.width = Math.max(1, Math.floor(viewport.width * ratio))
-        canvas.height = Math.max(1, Math.floor(viewport.height * ratio))
-        canvas.style.width = `${viewport.width}px`
-        canvas.style.height = `${viewport.height}px`
-        task = page.render({ canvas, viewport, transform: ratio === 1 ? undefined : [ratio, 0, 0, ratio, 0, 0] })
+        staging.width = Math.max(1, Math.floor(viewport.width * ratio))
+        staging.height = Math.max(1, Math.floor(viewport.height * ratio))
+        task = page.render({ canvas: staging, viewport, transform: ratio === 1 ? undefined : [ratio, 0, 0, ratio, 0, 0] })
         await task.promise
-        if (!cancelled) canvas.dataset.renderState = 'ready'
+        if (!cancelled) {
+          canvas.width = staging.width
+          canvas.height = staging.height
+          canvas.style.width = `${viewport.width}px`
+          canvas.style.height = `${viewport.height}px`
+          const context = canvas.getContext('2d')
+          if (!context) throw new Error('Could not update the PDF preview.')
+          context.drawImage(staging, 0, 0)
+          canvas.dataset.renderState = 'ready'
+        }
       } catch (error) { if (!cancelled) onError?.(error instanceof Error ? error.message : 'Page could not be rendered.') }
+      finally { staging.width = 0; staging.height = 0 }
     }
     if (thumbnail) { observer = new IntersectionObserver(entries => { if (entries.some(entry => entry.isIntersecting)) { observer?.disconnect(); void render() } }); observer.observe(canvas) }
     else void render()
