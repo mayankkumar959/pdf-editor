@@ -97,6 +97,7 @@ type EditorState = { edits: Edits; boxes: TextBoxes; formats: TextFormats; objec
 
 function App() {
   const [document, setDocument] = useState<EditorDocument | null>(null)
+  const [editorRoute, setEditorRoute] = useState(() => window.location.pathname.replace(/\/+$/, '') === '/editor')
   const [preview, setPreview] = useState<pdfjs.PDFDocumentProxy | null>(null)
   const [pageIndex, setPageIndex] = useState(0)
   const [zoom, setZoom] = useState(1)
@@ -129,6 +130,11 @@ function App() {
   const latestState = useRef(history[historyIndex])
   const latestHistoryIndex = useRef(historyIndex)
   useLayoutEffect(() => { latestState.current = history[historyIndex]; latestHistoryIndex.current = historyIndex }, [history, historyIndex])
+  useEffect(() => {
+    const syncRoute = () => setEditorRoute(window.location.pathname.replace(/\/+$/, '') === '/editor')
+    window.addEventListener('popstate', syncRoute)
+    return () => window.removeEventListener('popstate', syncRoute)
+  }, [])
   const objectChanged = !!objectDraft && !sameObject(objectDraft, objects.find(object => object.id === objectDraft.id))
   const page = document?.pages[pageIndex]
   const selected = page?.blocks.find(block => block.id === selectedId)
@@ -152,6 +158,8 @@ function App() {
       latestDocument.current = opened
       const previousPreview = latestPreview.current
       latestPreview.current = null
+      if (window.location.pathname.replace(/\/+$/, '') !== '/editor') window.history.pushState({ papyoraRoute: 'editor' }, '', '/editor')
+      setEditorRoute(true)
       setDocument(opened); setPreview(null); setFileName(filename.replace(/\.pdf$/i, '-edited.pdf'))
       setHistory([{ edits: {}, boxes: {}, formats: {}, objects: [] }]); setHistoryIndex(0); setPageIndex(0); setSelectedId(null); setObjectDraft(null); setDraftBox(undefined); setDraftFormat(undefined); setMode('edit')
       const availableWidth = window.innerWidth - (window.innerWidth <= 560 ? 0 : window.innerWidth <= 800 ? 233 : window.innerWidth <= 1100 ? 400 : window.innerWidth >= 1600 ? 496 : 452)
@@ -439,7 +447,7 @@ function App() {
         <button className="button primary" disabled={!document || !!busy} onClick={() => void download()}><Icon name="download"/>Download PDF</button>
       </header>
 
-      {document ? <>
+      {document && editorRoute ? <>
         <div className="editor-toolbar">
           <div className="document-name"><Icon name="document"/><input aria-label="Download filename" value={fileName} onChange={event => setFileName(event.target.value)} /><span className="file-badge">PDF</span></div>
           <div className="mode-switch" aria-label="Editor mode"><button className={mode === 'edit' ? 'selected' : ''} onClick={() => setMode('edit')}><Icon name="text" size={15}/>Edit text</button><button className={mode === 'view' ? 'selected' : ''} onClick={() => { if ((!draftChanged && !objectChanged) || applyDraft()) { setMode('view'); setSelectedId(null); setObjectDraft(null) } }}>View</button></div>
