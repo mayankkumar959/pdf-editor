@@ -29,7 +29,17 @@ Detailed generated reports: `test-results/verification.json` and `test-results/p
 
 The subsequent feature update adds movable/resizable multiline text, images, drawn/uploaded visual signatures, ordered merging, page extraction and splitting to a ZIP. Build, lint, the existing editor regressions, `verify:tools` and the extended production verification passed. Export tests cover all four rotations with cropped pages, exact added-text baselines, image pixel orientation, real pointer gestures, pending objects in downloads, merge order and preservation of edited pages in split outputs. The split archive also opens using .NET's independent ZIP reader. See `test-results/tools-verification.json` and README usage/limits.
 
-## Remaining limits
+## Flow editing update - 10 October 2026
+
+The default Edit text mode now uses native cursor selection and continuous paragraph editing. Text wraps at its original size, pushes later paragraphs down, and creates continuation pages instead of shrinking text. Deleting/undoing pulls text back. Enter, soft line breaks, plain-text paste, formatting and cross-page Backspace work without rebuilding the page canvas on each keystroke. Footer text is editable; recurring columns remain independent.
+
+Exports retain vector text and original artwork, reuse embedded font resources where supported, and preserve unchanged PDFs byte-for-byte. Page navigation and thumbnails include continuation pages. Added objects can be placed on original or continuation pages and keep the correct export placement. Layout text remains available for precise positioned editing and unsupported content streams.
+
+Real browser verification covers typing in the middle, mixed bold/regular text, pagination, undo/redo and caret restoration, long unbroken words, native clipboard paste, editable footers, object mapping, saved/reopened PDFs, columns, embedded subset fonts, inline images, mobile typing and 25/50/200% zoom. See `npm run verify:flow` and `test-results/flow-verification.json`. `npm run verify:flow:production` separately checks bundled flow editing, pagination, download/reopen and further editing. The isolated Playwright browser also runs the existing editor, tools and production checks without requiring an exposed debugging port.
+
+PDFs do not contain dependable paragraph or reading-order metadata. Paragraph/column grouping is inferred from text positions; intricate tables, sidebars or overlapping designs may need Layout text. Original pages remain separate sections, with continuation pages inserted immediately after their source page. Fonts missing newly typed glyphs use a compatible font at the same size. Unsupported inline-image encodings fail visibly instead of silently rasterizing the document. These are not guarantees of Word-style layout fidelity for every PDF.
+
+## Remaining limits from the earlier review
 
 - `npm audit --omit=dev --json` could not reach the registry audit endpoint in this environment. Dependency vulnerability status is unverified.
 - Vite reports a large main bundle (about 1.13 MB before gzip). The production build works; initial loading could benefit from code splitting.

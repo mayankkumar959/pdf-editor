@@ -10,7 +10,9 @@
     "preview": "vite preview",
     "verify:editor": "node scripts/verify-editor.mjs",
     "verify:tools": "node scripts/verify-tools.mjs",
-    "verify:production": "node scripts/verify-production.mjs"
+    "verify:production": "node scripts/verify-production.mjs",
+    "verify:flow": "node scripts/verify-flow.mjs",
+    "verify:flow:production": "node scripts/verify-flow-production.mjs"
   },
   "dependencies": {
     "pdf-lib": "^1.17.1",
@@ -24,6 +26,7 @@
     "@types/react-dom": "^19.2.7",
     "@vitejs/plugin-react": "^6.1.1",
     "oxlint": "^1.81.0",
+    "playwright": "^1.64.0",
     "typescript": "~6.0.2",
     "vite": "^8.3.0"
   }

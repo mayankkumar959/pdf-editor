@@ -1,20 +1,21 @@
+import { browserSession } from './browser-session.mjs'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import assert from 'node:assert/strict'
 import { resolve } from 'node:path'
 
 const base = 'http://127.0.0.1:5173'
-const tabs = await (await fetch('http://127.0.0.1:9222/json')).json()
-const socket = new WebSocket(tabs[0].webSocketDebuggerUrl)
-await new Promise(resolve => socket.addEventListener('open', resolve, { once: true }))
-const pending = new Map()
-const browserErrors = []
-let serial = 0
-socket.addEventListener('message', event => {
-  const message = JSON.parse(event.data)
-  if (message.id) { const task = pending.get(message.id); pending.delete(message.id); if (message.error) task?.reject(new Error(message.error.message)); else task?.resolve(message.result) }
-  if (message.method === 'Runtime.exceptionThrown') browserErrors.push(message.params.exceptionDetails.exception?.description ?? message.params.exceptionDetails.text)
-})
-function send(method, params = {}) { const id = ++serial; socket.send(JSON.stringify({ id, method, params })); return new Promise((resolve, reject) => pending.set(id, { resolve, reject })) }
+const session = await browserSession()
+const { send } = session
+const browserErrors = session.errors
+try {
+
+async function activateLayout(filename) {
+  if (filename) await until(`document.querySelector('[aria-label="Download filename"]')?.value === ${JSON.stringify(filename)} && !document.querySelector('.loading-overlay')`)
+  else await until(`!document.querySelector('.loading-overlay')`)
+  await evaluate(`[...document.querySelectorAll('.mode-switch button')].find(button => button.textContent === 'Layout text').click()`)
+  await until(`document.querySelector('.document-canvas')?.dataset.renderState === 'ready' && !document.querySelector('.loading-overlay')`)
+}
+
 async function evaluate(expression) {
   const result = await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true })
   if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description ?? result.exceptionDetails.text)
@@ -57,6 +58,7 @@ await send('Page.navigate', { url: base })
 await until(`document.querySelector('.demo-button')`)
 await screenshot('welcome.png')
 await evaluate(`document.querySelector('.demo-button').click()`)
+await activateLayout('sample-edited.pdf')
 await until(`document.querySelectorAll('.text-target').length > 0 && !document.querySelector('.loading-overlay')`)
 await until(`document.querySelector('.document-canvas')?.dataset.renderState === 'ready'`)
 const initial = await evaluate(`({ text: document.body.innerText, editable: document.querySelectorAll('.text-target:not(.locked)').length, locked: document.querySelectorAll('.text-target.locked').length })`)
@@ -127,6 +129,7 @@ await until(`document.querySelector('.demo-button')`)
 const dom = await send('DOM.getDocument')
 const fileNode = await send('DOM.querySelector', { nodeId: dom.root.nodeId, selector: '#file-upload' })
 await send('DOM.setFileInputFiles', { nodeId: fileNode.nodeId, files: [resolve('test-results/embedded-font.pdf')] })
+await activateLayout('embedded-font-edited.pdf')
 await until(`document.querySelectorAll('.text-target').length > 0 && !document.querySelector('.loading-overlay')`)
 await click('Edit text: Original font sample')
 assert.equal(await evaluate(`document.querySelector('#text-value').disabled`), false)
@@ -287,6 +290,7 @@ for (const percent of [25,200]) {
 }
 const offerDom=await send('DOM.getDocument');const offerInput=await send('DOM.querySelector',{nodeId:offerDom.root.nodeId,selector:'#file-upload'});
 await send('DOM.setFileInputFiles',{nodeId:offerInput.nodeId,files:[resolve('test-results/offer-letter-aliases.pdf')]});
+await activateLayout('offer-letter-aliases-edited.pdf')
 await until(`document.querySelector('[aria-label="Edit text: Dated: 10th June 2026"]') && !document.querySelector('.loading-overlay') && document.querySelector('.document-canvas')?.dataset.renderState==='ready'`)
 assert.equal(await evaluate(`document.querySelector('[aria-label="Edit text: Dated: 10th June 2026"]').classList.contains('locked')`),false)
 await click('Edit text: Dated: 10th June 2026')
@@ -331,6 +335,7 @@ await writeFile('test-results/bold-fallback-edited.pdf',new Uint8Array(fallback.
 delete fallback.bytes;delete fallback.saved
 const fallbackDom=await send('DOM.getDocument');const fallbackInput=await send('DOM.querySelector',{nodeId:fallbackDom.root.nodeId,selector:'#file-upload'});
 await send('DOM.setFileInputFiles',{nodeId:fallbackInput.nodeId,files:[resolve('test-results/bold-fallback.pdf')]});
+await activateLayout('bold-fallback-edited.pdf')
 await until(`document.querySelector('[aria-label="Edit text: Dated: 10th June 2026"]') && !document.querySelector('.loading-overlay') && document.querySelector('.document-canvas')?.dataset.renderState==='ready'`)
 assert.equal(await evaluate(`document.querySelectorAll('.text-target.locked').length`),0)
 await click('Edit text: Dated: 10th June 2026')
@@ -368,6 +373,7 @@ assertInside(resized.largeGeometry,595,842)
 // Real pointer dragging at 50% zoom must use document units, not screen pixels.
 const resizeDom=await send('DOM.getDocument');const resizeInput=await send('DOM.querySelector',{nodeId:resizeDom.root.nodeId,selector:'#file-upload'});
 await send('DOM.setFileInputFiles',{nodeId:resizeInput.nodeId,files:[resolve('test-results/offer-letter-aliases.pdf')]});
+await activateLayout('offer-letter-aliases-edited.pdf')
 await until(`document.querySelector('[aria-label="Edit text: Dear Mayank Kumar,"]') && !document.querySelector('.loading-overlay') && document.querySelector('.document-canvas')?.dataset.renderState==='ready'`)
 await evaluate(`(() => {const select=document.querySelector('[aria-label="Zoom level"]');Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set.call(select,'50');select.dispatchEvent(new Event('change',{bubbles:true}));})()`)
 await until(`document.querySelector('.document-canvas')?.dataset.renderState==='ready'`)
@@ -501,4 +507,4 @@ await click('Dismiss message')
 await writeFile('test-results/verification.json', JSON.stringify({ engineResult, embedded, actualDownloadText, structures, alignment, offerLetter, fallback, resized, resizedSaved, formatting, formatSaved, audit, numericSaved, browserErrors }, null, 2))
 assert.deepEqual(browserErrors, [])
 console.log('PASS: real double-click selection at 25%/100%/200%, auto-fit, long text, columns, page edges, rotation/crop, PDF spacing restoration, download, fonts, multi-page edits, undo/redo, and browser console.')
-socket.close()
+} finally { await session.close() }

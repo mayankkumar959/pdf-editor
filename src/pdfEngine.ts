@@ -11,7 +11,7 @@ export const pdfOptions = {
   wasmUrl: `${import.meta.env.BASE_URL}pdfjs/wasm/`,
 }
 
-type Token = { start: number; end: number; value: string; bytes?: Uint8Array; children?: Token[] }
+type Token = { start: number; end: number; value: string; bytes?: Uint8Array; children?: Token[]; inlineImage?: boolean }
 type Operation = { start: number; end: number; command: string; args: Token[] }
 type FontInfo = { name: string; identity: string; resource: string; codes: Map<string, string>; widths: Map<string, number>; standard?: PDFFont; size: number; spacing: number; wordSpacing: number; dict?: PDFDict }
 type StreamNode = { key: string; source: string; stream: PDFRawStream; operations: Operation[]; resources: PDFDict; children: Map<number, StreamNode> }
@@ -36,7 +36,7 @@ const familyKey = (font: string) => font.replace(/bold|italic|oblique|roman|regu
 const colourCommand = (colour: string) => [1, 3, 5].map(offset => (parseInt(colour.slice(offset, offset + 2), 16) / 255).toFixed(6)).join(' ')
 
 // A lexical reader keeps string/array boundaries intact, including escaped parentheses.
-function tokenize(source: string): Token[] {
+function tokenize(source: string, allowInlineImages = false): Token[] {
   let position = 0
   function next(): Token | undefined {
     while (position < source.length) {
@@ -84,17 +84,42 @@ function tokenize(source: string): Token[] {
     }
     if ('<>]'.includes(ch)) { if (source[position] === ch && ch !== ']') position++; return { start, end: position, value: source.slice(start, position) } }
     while (position < source.length && !/[\s\0()[\]<>/%]/.test(source[position])) position++
-    return { start, end: position, value: source.slice(start, position) }
+    const value = source.slice(start, position)
+    if (value === 'BI' && allowInlineImages) {
+      const header: Token[] = []
+      for (;;) { const token = next(); if (!token) throw new Error('Incomplete inline image.'); if (token.value === 'ID') break; header.push(token) }
+      const field = (...keys: string[]) => { const index = header.findIndex(token => keys.includes(token.value)); return index < 0 ? undefined : header[index + 1]?.value }
+      // Uncompressed image lengths are exact, so binary bytes resembling EI
+      // cannot terminate the image early. Unknown compressed data fails safely.
+      const width = Number(field('/W', '/Width')), height = Number(field('/H', '/Height'))
+      const bits = Number(field('/BPC', '/BitsPerComponent') ?? (field('/IM', '/ImageMask') === 'true' ? 1 : 8))
+      const colour = field('/CS', '/ColorSpace') ?? '/G'
+      const components = ['/RGB', '/DeviceRGB'].includes(colour) ? 3 : ['/CMYK', '/DeviceCMYK'].includes(colour) ? 4 : ['/G', '/DeviceGray', '/I', '/Indexed'].includes(colour) ? 1 : 0
+      if (source[position] === '\r' && source[position + 1] === '\n') position += 2
+      else if (/\s/.test(source[position])) position++
+      const filter = field('/F', '/Filter')
+      if (!filter && width > 0 && height > 0 && components && [1, 2, 4, 8, 16].includes(bits)) position += Math.ceil(width * components * bits / 8) * height
+      else if (['/AHx', '/ASCIIHexDecode'].includes(filter ?? '')) { const end = source.indexOf('>', position); if (end < 0) throw new Error('Incomplete inline image.'); position = end + 1 }
+      else if (['/A85', '/ASCII85Decode'].includes(filter ?? '')) { const end = source.indexOf('~>', position); if (end < 0) throw new Error('Incomplete inline image.'); position = end + 2 }
+      else if (['/DCT', '/DCTDecode'].includes(filter ?? '')) { const end = source.indexOf('\xff\xd9', position); if (end < 0) throw new Error('Incomplete inline JPEG.'); position = end + 2 }
+      else throw new Error('This inline image encoding cannot be safely separated from text.')
+      while (/\s/.test(source[position] ?? '') && position < source.length) position++
+      if (source.slice(position, position + 2) !== 'EI') throw new Error('Invalid inline image boundary.')
+      position += 2
+      return { start, end: position, value: source.slice(start, position), inlineImage: true }
+    }
+    return { start, end: position, value }
   }
   const result: Token[] = []
   while (position < source.length) { const token = next(); if (token) result.push(token) }
   return result
 }
 
-function operations(source: string): Operation[] {
+function operations(source: string, allowInlineImages = false): Operation[] {
   const result: Operation[] = []
   let args: Token[] = []
-  for (const token of tokenize(source)) {
+  for (const token of tokenize(source, allowInlineImages)) {
+    if (token.inlineImage) { result.push({ start: token.start, end: token.end, command: 'BI', args: [] }); args = []; continue }
     if (!token.bytes && !token.children && !token.value.startsWith('/') && /^(?:[A-Za-z][A-Za-z0-9*]*|['"])$/.test(token.value) && !['true', 'false', 'null'].includes(token.value)) {
       // Inline image binary needs the rendered-page export strategy.
       if (token.value === 'BI') throw new Error('Inline image stream')
@@ -158,7 +183,7 @@ function bytesFor(operation: Operation): Uint8Array {
   return new Uint8Array(tokens.flatMap(token => token.bytes ? Array.from(token.bytes) : []))
 }
 
-async function readPage(doc: PDFDocument, index: number): Promise<{ roots: StreamNode[]; runs: Run[] }> {
+async function readPage(doc: PDFDocument, index: number, allowInlineImages = false): Promise<{ roots: StreamNode[]; runs: Run[] }> {
   const page = doc.getPage(index)
   const roots: StreamNode[] = [], runs: Run[] = []
   const fonts = new Map<PDFDict, FontInfo>()
@@ -167,7 +192,7 @@ async function readPage(doc: PDFDocument, index: number): Promise<{ roots: Strea
   async function read(stream: PDFRawStream, resources: PDFDict, key: string, depth: number): Promise<StreamNode> {
     if (depth > 12) throw new Error('Nested PDF form limit')
     const source = binary(decodePDFRawStream(stream).decode())
-    const node: StreamNode = { key, stream, source, operations: operations(source), resources, children: new Map() }
+    const node: StreamNode = { key, stream, source, operations: operations(source, allowInlineImages), resources, children: new Map() }
     for (let i = 0; i < node.operations.length; i++) {
       const op = node.operations[i]
       if (op.command === 'q') stack.push({ ...font })
@@ -608,6 +633,115 @@ function editFont(block: TextBlock, text: string, format: TextFormat = {}): Font
 export function fontForEdit(block: TextBlock, text: string, format: TextFormat = {}): { name: string; substituted: boolean } {
   const font = editFont(block, text, format)
   return { name: font.name, substituted: font !== block.sourceFont && familyKey(font.name) !== familyKey(block.font) }
+}
+
+// Flow editing uses actual font metrics and never fits text by reducing its size.
+export function flowFont(block: TextBlock, text: string, format: TextFormat = {}) {
+  const font = editFont(block, text.replace(/[\r\n\t]/g, ' '), format)
+  const standardFamily = /Times/.test(font.name) ? 'Times New Roman' : /Courier/.test(font.name) ? 'Courier New' : 'Arial'
+  return { ...fontForEdit(block, text.replace(/[\r\n\t]/g, ' '), format), family: font === block.sourceFont && !font.standard ? block.item.fontName : standardFamily }
+}
+
+export type FlowPlacement = { blockId: string; text: string; x: number; baseline: number; width: number; format: TextFormat }
+export type FlowOutputPage = { source: number; continuation: boolean; lines: FlowPlacement[] }
+
+// Remove text instructions, not page artwork. Each Form invocation gets its own
+// resources, so shared forms remain independent and images/paths stay vectors.
+export async function textFreeDocument(document: EditorDocument): Promise<Uint8Array> {
+  const native = await PDFDocument.load(document.bytes)
+  for (let index = 0; index < document.pages.length; index++) {
+    const model = document.pages[index]
+    if (!model.blocks.length) continue
+    let roots = model.roots
+    if (!roots.length) {
+      try { roots = (await readPage(native, index, true)).roots }
+      catch { throw new Error('This PDF has an unsupported content stream. Use Layout text to edit it while preserving its appearance.') }
+    }
+    function rewrite(node: StreamNode): PDFRawStream {
+      const resources = node.resources.clone(native.context)
+      const oldObjects = resources.lookup(name('XObject'))
+      const objects = oldObjects instanceof PDFDict ? oldObjects.clone(native.context) : undefined
+      if (objects) resources.set(name('XObject'), objects)
+      const changes: { start: number; end: number; text: string }[] = []
+      node.operations.forEach((op, i) => {
+        if (['Tj', 'TJ', "'", '"'].includes(op.command)) changes.push({ start: op.start, end: op.end, text: op.command === "'" ? 'T*' : op.command === '"' ? `${op.args[0].value} Tw ${op.args[1].value} Tc T*` : '[] TJ' })
+        const child = node.children.get(i)
+        if (child && objects) {
+          const alias = objects.uniqueKey('PapyoraFlowForm')
+          objects.set(alias, native.context.register(rewrite(child)))
+          changes.push({ start: op.start, end: op.end, text: `${alias} Do` })
+        }
+      })
+      let source = node.source
+      for (const change of changes.sort((a, b) => b.start - a.start)) source = source.slice(0, change.start) + change.text + source.slice(change.end)
+      const dict = node.stream.dict.clone(native.context)
+      dict.delete(name('Filter')); dict.delete(name('DecodeParms')); dict.delete(name('Length'))
+      dict.set(name('Resources'), resources)
+      return PDFRawStream.of(dict, Uint8Array.from(source, char => char.charCodeAt(0)))
+    }
+    const streams = roots.filter(root => !root.stream.dict.has(name('FolioX'))).map(rewrite)
+    const resources = native.getPage(index).node.Resources()?.clone(native.context) ?? native.context.obj({})
+    const oldObjects = resources.lookup(name('XObject'))
+    const objects = oldObjects instanceof PDFDict ? oldObjects.clone(native.context) : native.context.obj({})
+    for (const stream of streams) {
+      const own = stream.dict.lookup(name('Resources'), PDFDict).lookup(name('XObject'))
+      if (own instanceof PDFDict) own.entries().forEach(([key, value]) => objects.set(key, value))
+      stream.dict.delete(name('Resources'))
+    }
+    resources.set(name('XObject'), objects)
+    native.getPage(index).node.set(name('Resources'), resources)
+    native.getPage(index).node.set(name('Contents'), native.context.obj(streams.map(stream => native.context.register(stream))))
+  }
+  return new Uint8Array(await native.save())
+}
+
+export async function exportFlowDocument(document: EditorDocument, background: Uint8Array, pages: FlowOutputPage[]): Promise<Uint8Array> {
+  const native = await PDFDocument.load(background)
+  const blocks = new Map(document.pages.flatMap(page => page.blocks.map(block => [block.id, block] as const)))
+  let inserted = 0
+  for (let index = 0; index < pages.length; index++) {
+    const output = pages[index], model = document.pages[output.source]
+    if (output.continuation) { native.insertPage(index, [model.width, model.height]); inserted++ }
+    else if (index !== output.source + inserted) throw new Error('The document page order changed unexpectedly.')
+    const page = native.getPage(index)
+    const resources = page.node.Resources()?.clone(native.context) ?? native.context.obj({})
+    const oldFonts = resources.lookup(name('Font'))
+    const fonts = oldFonts instanceof PDFDict ? oldFonts.clone(native.context) : native.context.obj({})
+    resources.set(name('Font'), fonts); page.node.set(name('Resources'), resources)
+    const aliases = new Map<FontInfo, PDFName>(), commands: string[] = []
+    // Screen coordinates have their origin at the top-left. Continuation
+    // sheets are upright; existing sheets retain their CropBox and rotation.
+    const [a, b, c, d, e, f] = output.continuation ? [1, 0, 0, -1, 0, model.height] : model.viewportTransform
+    const determinant = a * d - b * c
+    const inverse = [d / determinant, -b / determinant, -c / determinant, a / determinant, (c * f - d * e) / determinant, (b * e - a * f) / determinant]
+    commands.push(`q ${inverse.join(' ')} cm`)
+    for (const line of output.lines) {
+      if (!line.text) continue
+      const block = blocks.get(line.blockId)
+      if (!block) throw new Error('The original font for this text could not be found.')
+      const font = editFont(block, line.text, line.format)
+      let alias = aliases.get(font)
+      if (!alias) {
+        alias = fonts.uniqueKey('PapyoraFlowFont')
+        const ref = font.dict?.context.getObjectRef(font.dict) ?? (await native.embedFont(font.name as StandardFonts)).ref
+        fonts.set(alias, ref); aliases.set(font, alias)
+      }
+      const size = line.format.fontSize ?? block.originalFormat.fontSize ?? 12
+      if (!Number.isFinite(size) || size < 1 || size > 300) throw new Error('Choose a font size between 1 and 300 pt.')
+      const encoded = encode(line.text, { ...font, size, spacing: 0, wordSpacing: 0 })
+      const colour = colourCommand(line.format.color ?? block.originalFormat.color ?? '#000000')
+      // PDF.js font faces and the browser share these font metrics. Keep the
+      // requested vertical size; tracking matches the measured browser line.
+      const naturalWidth = encoded.visibleAdvance * size / 1000
+      const horizontal = naturalWidth > 0 ? line.width / naturalWidth : 1
+      commands.push(`q ${colour} rg BT ${alias} ${size} Tf 0 Tc 0 Tw 0 Tr ${horizontal.toFixed(8)} 0 0 -1 ${line.x.toFixed(6)} ${line.baseline.toFixed(6)} Tm <${encoded.code}> Tj ET`)
+      for (const offset of [line.format.underline ? .13 : null, line.format.strike ? -.3 : null]) if (offset !== null) commands.push(`${colour} RG ${Math.max(.4, size / 18)} w ${line.x} ${line.baseline + size * offset} m ${line.x + line.width} ${line.baseline + size * offset} l S`)
+      commands.push('Q')
+    }
+    commands.push('Q')
+    page.node.addContentStream(native.context.register(native.context.flateStream(commands.join('\n'))))
+  }
+  return new Uint8Array(await native.save())
 }
 
 function nativeEdit(block: TextBlock, text: string): boolean {

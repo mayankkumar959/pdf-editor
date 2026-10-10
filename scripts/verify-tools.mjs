@@ -1,20 +1,21 @@
+import { browserSession } from './browser-session.mjs'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import assert from 'node:assert/strict'
 import { resolve } from 'node:path'
 
 const base = 'http://127.0.0.1:5173'
-const tabs = await (await fetch('http://127.0.0.1:9222/json')).json()
-const socket = new WebSocket(tabs[0].webSocketDebuggerUrl)
-await new Promise(resolve => socket.addEventListener('open', resolve, { once: true }))
-const pending = new Map()
-const browserErrors = []
-let serial = 0
-socket.addEventListener('message', event => {
-  const message = JSON.parse(event.data)
-  if (message.id) { const task = pending.get(message.id); pending.delete(message.id); if (message.error) task?.reject(new Error(message.error.message)); else task?.resolve(message.result) }
-  if (message.method === 'Runtime.exceptionThrown') browserErrors.push(message.params.exceptionDetails.exception?.description ?? message.params.exceptionDetails.text)
-})
-function send(method, params = {}) { const id = ++serial; socket.send(JSON.stringify({ id, method, params })); return new Promise((resolve, reject) => pending.set(id, { resolve, reject })) }
+const session = await browserSession()
+const { send } = session
+const browserErrors = session.errors
+try {
+
+async function activateLayout(filename) {
+  if (filename) await until(`document.querySelector('[aria-label="Download filename"]')?.value === ${JSON.stringify(filename)} && !document.querySelector('.loading-overlay')`)
+  else await until(`!document.querySelector('.loading-overlay')`)
+  await evaluate(`[...document.querySelectorAll('.mode-switch button')].find(button => button.textContent === 'Layout text').click()`)
+  await until(`document.querySelector('.document-canvas')?.dataset.renderState === 'ready' && !document.querySelector('.loading-overlay')`)
+}
+
 async function evaluate(expression) {
   const result = await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true })
   if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description ?? result.exceptionDetails.text)
@@ -91,6 +92,7 @@ await writeFile('test-results/tools-image.png',Buffer.from(geometry.image,'base6
 await writeFile('test-results/tools-extra.pdf',new Uint8Array(geometry.extra));delete geometry.image;delete geometry.extra
 
 await evaluate(`document.querySelector('.demo-button').click()`)
+await activateLayout('sample-edited.pdf')
 await until(`document.querySelector('.document-canvas')?.dataset.renderState==='ready' && !document.querySelector('.loading-overlay')`)
 await press('New text');await until(`document.querySelector('[aria-label="New text content"]') && !document.querySelector('.loading-overlay')`)
 await input('New text content','Project update\nApproved')
@@ -137,6 +139,7 @@ await click('Move tools-extra.pdf up')
 assert.ok(await evaluate(`document.querySelector('.merge-file').textContent.includes('tools-extra.pdf')`))
 await press('Merge and open')
 await until(`document.querySelectorAll('.page-thumbnail').length===3 && !document.querySelector('.loading-overlay') && !document.querySelector('dialog[open]')`)
+await activateLayout('merged-edited.pdf')
 assert.ok(await evaluate(`!!document.querySelector('[aria-label="Edit text: Extra document page"]')`))
 await click('Go to page 2');await until(`document.querySelector('[aria-label="Edit text: Project update"]')`)
 await input('Download filename',`merged-tools-${stamp}.pdf`)
@@ -156,4 +159,4 @@ await screenshot('tools-merged.png')
 assert.deepEqual(browserErrors,[])
 await writeFile('test-results/tools-verification.json',JSON.stringify({geometry,beforeMove,afterMove,beforeResize,afterResize,imageRatio,savedPages,extractedPages,zipPageCounts:zipPages.map(p=>p.length),browserErrors},null,2))
 console.log('PASS: new text, multiline formatting, pointer move/resize, undo/redo, image upload, signature drawing, actual save, all page rotations/crops, ordered merge, selected-page extraction and split ZIP.')
-socket.close()
+} finally { await session.close() }

@@ -1,15 +1,21 @@
+import { browserSession } from './browser-session.mjs'
 import assert from 'node:assert/strict'
 import {readFile,writeFile,mkdir} from 'node:fs/promises'
 import {resolve,basename} from 'node:path'
-const tabs=await(await fetch('http://127.0.0.1:9222/json')).json()
-const ws=new WebSocket(tabs[0].webSocketDebuggerUrl)
-await new Promise(r=>ws.addEventListener('open',r,{once:true}))
-let serial=0;const pending=new Map(),errors=[],failedRequests=[]
-ws.addEventListener('message',event=>{const m=JSON.parse(event.data);if(m.id){const t=pending.get(m.id);pending.delete(m.id);if(m.error)t.reject(new Error(m.error.message));else t.resolve(m.result)}if(m.method==='Runtime.exceptionThrown')errors.push(m.params.exceptionDetails.text);if(m.method==='Network.loadingFailed'&&!m.params.canceled)failedRequests.push(m.params.errorText)})
-function send(method,params={}){const id=++serial;ws.send(JSON.stringify({id,method,params}));return new Promise((resolve,reject)=>pending.set(id,{resolve,reject}))}
+const session = await browserSession()
+const { send, errors, failedRequests } = session
+try {
+
+async function activateLayout(filename) {
+  if (filename) await until(`document.querySelector('[aria-label="Download filename"]')?.value === ${JSON.stringify(filename)} && !document.querySelector('.loading-overlay')`)
+  else await until(`!document.querySelector('.loading-overlay')`)
+  await evaluate(`[...document.querySelectorAll('.mode-switch button')].find(button => button.textContent === 'Layout text').click()`)
+  await until(`document.querySelector('.document-canvas')?.dataset.renderState === 'ready' && !document.querySelector('.loading-overlay')`)
+}
+
 async function evaluate(expression){const r=await send('Runtime.evaluate',{expression,awaitPromise:true,returnByValue:true});if(r.exceptionDetails)throw new Error(r.exceptionDetails.exception?.description??r.exceptionDetails.text);return r.result.value}
 async function until(expression){for(let i=0;i<160;i++){if(await evaluate('Boolean('+expression+')'))return;await new Promise(r=>setTimeout(r,100))}throw new Error('Timed out: '+expression)}
-async function upload(path){const d=await send('DOM.getDocument');const n=await send('DOM.querySelector',{nodeId:d.root.nodeId,selector:'#file-upload'});await send('DOM.setFileInputFiles',{nodeId:n.nodeId,files:[resolve(path)]});await until("document.querySelector('[aria-label=\"Download filename\"]')?.value==="+JSON.stringify(basename(path).replace(/\.pdf$/i,'-edited.pdf'))+" && !document.querySelector('.loading-overlay') && document.querySelector('.document-canvas')?.dataset.renderState==='ready'")}
+async function upload(path){const d=await send('DOM.getDocument');const n=await send('DOM.querySelector',{nodeId:d.root.nodeId,selector:'#file-upload'});await send('DOM.setFileInputFiles',{nodeId:n.nodeId,files:[resolve(path)]});await activateLayout(basename(path).replace(/\.pdf$/i,'-edited.pdf'));await until("document.querySelector('[aria-label=\"Download filename\"]')?.value==="+JSON.stringify(basename(path).replace(/\.pdf$/i,'-edited.pdf'))+" && !document.querySelector('.loading-overlay') && document.querySelector('.document-canvas')?.dataset.renderState==='ready'")}
 await mkdir('test-results',{recursive:true})
 await send('Runtime.enable');await send('Network.enable');await send('Page.enable')
 await send('Page.setDownloadBehavior',{behavior:'allow',downloadPath:resolve('test-results')})
@@ -61,6 +67,7 @@ assert.ok(await evaluate(`(()=>{const c=document.querySelector('.document-canvas
 await toolButton('Merge PDFs');await fileInput('[aria-label="Choose PDFs to merge"]','test-results/embedded-font.pdf')
 await until(`document.querySelectorAll('.merge-file').length===2`);await toolButton('Merge and open')
 await until(`document.querySelectorAll('.page-thumbnail').length===2 && !document.querySelector('dialog[open]') && !document.querySelector('.loading-overlay')`)
+await activateLayout('merged-edited.pdf')
 const extractBase='production-extract-'+Date.now();await field('Download filename',extractBase+'.pdf')
 await toolButton('Split / extract');await field('Page ranges','1');await toolButton('Download extracted PDF');await waitDownload(extractBase+'-extracted.pdf')
 await until(`!document.querySelector('dialog[open]') && !document.querySelector('.loading-overlay')`);await upload('test-results/'+extractBase+'-extracted.pdf')
@@ -69,4 +76,4 @@ assert.ok(await evaluate(`!!document.querySelector('[aria-label="Edit text: Prod
 assert.deepEqual(errors,[]);assert.deepEqual(failedRequests,[])
 await writeFile('test-results/production-verification.json',JSON.stringify({result:'PASS',downloadedBytes:downloaded.length,embeddedFontUpload:true,fallbackEdit:true,reopenedEditable:true,boldAndUnderlinePreserved:true,newText:true,imagePixels:true,drawnSignature:true,merge:true,extract:true,errors,failedRequests},null,2))
 console.log('PASS: production upload, fonts, text editing, new text, images, signature, actual download/reopen, merge/extract and local assets.')
-ws.close()
+} finally { await session.close() }

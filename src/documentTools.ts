@@ -2,14 +2,14 @@ import { PDFDocument, StandardFonts, concatTransformationMatrix, popGraphicsStat
 import type { PDFFont } from 'pdf-lib'
 import type { PageModel, TextFormat } from './pdfEngine'
 
-type Bounds = { id: string; page: number; x: number; y: number; width: number; height: number }
+type Bounds = { id: string; page: number; flowContinuation?: number; x: number; y: number; width: number; height: number }
 export type AddedText = Bounds & { kind: 'text'; text: string; family: 'Helvetica' | 'Times' | 'Courier'; format: TextFormat }
 export type AddedImage = Bounds & { kind: 'image' | 'signature'; data: string; label: string }
 export type AddedObject = AddedText | AddedImage
 export type MergeFile = { id: string; name: string; bytes?: Uint8Array; pages: number }
 
 export function sameObject(a: AddedObject, b: AddedObject | undefined): boolean {
-  if (!b || a.id !== b.id || a.kind !== b.kind || a.page !== b.page || a.x !== b.x || a.y !== b.y || a.width !== b.width || a.height !== b.height) return false
+  if (!b || a.id !== b.id || a.kind !== b.kind || a.page !== b.page || a.flowContinuation !== b.flowContinuation || a.x !== b.x || a.y !== b.y || a.width !== b.width || a.height !== b.height) return false
   return a.kind === 'text' && b.kind === 'text' ? a.text === b.text && a.family === b.family && JSON.stringify(a.format) === JSON.stringify(b.format) : a.kind !== 'text' && b.kind !== 'text' && a.data === b.data && a.label === b.label
 }
 

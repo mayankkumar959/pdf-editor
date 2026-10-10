@@ -6,7 +6,7 @@ import type { PageModel } from './pdfEngine'
 import { FormattingControls, PointInput } from './TextControls'
 
 type ObjectCallbacks = { onSelect: (object: AddedObject) => boolean; onChange: (object: AddedObject) => void; onCommit: (object: AddedObject) => void }
-export function ObjectLayer({ objects, selected, page, zoom, editable, onSelect, onChange, onCommit }: { objects: AddedObject[]; selected: AddedObject | null; page: PageModel; zoom: number; editable: boolean } & ObjectCallbacks) {
+export function ObjectLayer({ objects, selected, page, zoom, interactionZoom = zoom, editable, onSelect, onChange, onCommit }: { objects: AddedObject[]; selected: AddedObject | null; page: PageModel; zoom: number; interactionZoom?: number; editable: boolean } & ObjectCallbacks) {
   const [editing, setEditing] = useState<string | null>(null)
   const drag = useRef<{ object: AddedObject; last: AddedObject; x: number; y: number; resize: boolean } | null>(null)
   function start(event: PointerEvent<HTMLDivElement | HTMLButtonElement>, object: AddedObject, resize = false) {
@@ -20,7 +20,7 @@ export function ObjectLayer({ objects, selected, page, zoom, editable, onSelect,
   function move(event: PointerEvent<HTMLDivElement | HTMLButtonElement>) {
     const current = drag.current
     if (!current) return
-    const dx = (event.clientX - current.x) / zoom, dy = (event.clientY - current.y) / zoom
+    const dx = (event.clientX - current.x) / interactionZoom, dy = (event.clientY - current.y) / interactionZoom
     let next = { ...current.object }
     if (current.resize) {
       if (next.kind === 'text') { next.width += dx; next.height += dy }
